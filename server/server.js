@@ -271,16 +271,35 @@ app.patch('/api/admin/orders/:id/status', auth, role('admin', 'owner'), async (r
   res.json({ order: updated });
 });
 
-app.get('/api/products', (_req, res) => {
-  const products = db.prepare('SELECT id,name,type,price_cents,compare_at_cents,shade,image,description,inventory FROM products WHERE active = 1 ORDER BY id').all();
-  res.json({ products });
+const localProducts = () => db.prepare('SELECT id,name,type,price_cents,compare_at_cents,shade,image,description,inventory,active,created_at FROM products ORDER BY id').all();
+const firestoreProducts = async () => {
+  if (!firebaseEnabled()) return null;
+  const remote = await firebaseList('products');
+  return remote.map(product => ({
+    id: Number(product.id || 0), name: product.name || 'Untitled product', type: product.type || 'Skincare',
+    price_cents: Number(product.price_cents || 0), compare_at_cents: product.compare_at_cents == null ? null : Number(product.compare_at_cents),
+    shade: product.shade || '', image: product.image || '', description: product.description || '', inventory: Number(product.inventory || 0),
+    active: product.active === false || product.active === 0 ? 0 : 1, created_at: product.created_at || null
+  }));
+};
+app.get('/api/products', async (_req, res) => {
+  try {
+    const products = (await firestoreProducts()) || localProducts();
+    res.json({ products: products.filter(product => product.active !== 0) });
+  } catch (error) {
+    console.warn(`Firestore product read skipped: ${error.message}`);
+    res.json({ products: localProducts().filter(product => product.active !== 0) });
+  }
 });
 app.get('/api/store-settings', (_req, res) => {
   const rows = db.prepare("SELECT key,value FROM store_settings WHERE key IN ('store_name','currency','upi_id')").all();
   res.json({ settings: Object.fromEntries(rows.map(row => [row.key, row.value])) });
 });
 app.get('/api/promotions', (_req, res) => res.json({ coupons: db.prepare("SELECT code,discount_type,discount_value,min_order_cents FROM coupons WHERE active = 1 ORDER BY created_at DESC").all() }));
-app.get('/api/admin/products', auth, role('admin', 'owner'), (_req, res) => res.json({ products: db.prepare('SELECT * FROM products ORDER BY created_at DESC').all() }));
+app.get('/api/admin/products', auth, role('admin', 'owner'), async (_req, res) => {
+  try { res.json({ products: (await firestoreProducts()) || localProducts() }); }
+  catch (error) { console.warn(`Firestore admin product read skipped: ${error.message}`); res.json({ products: localProducts() }); }
+});
 app.post('/api/admin/products', auth, role('admin', 'owner'), async (req, res) => {
   const { name, type, priceCents, compareAtCents = null, shade = '', image = '', description = '', inventory = 0 } = req.body || {};
   if (!name || !type || !Number.isInteger(priceCents)) return res.status(400).json({ error: 'name, type, and integer priceCents are required.' });
