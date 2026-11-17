@@ -68,6 +68,14 @@ db.exec(`
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT,
+    rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 const defaultSettings = { store_name: 'Danus Cosmetics', store_email: 'hello@lumiere.example', currency: 'INR', low_stock_alerts: 'true', customer_reviews: 'true', upi_id: '' };
 const saveSetting = db.prepare('INSERT OR IGNORE INTO store_settings (key,value) VALUES (?,?)');
@@ -319,6 +327,15 @@ app.get('/api/store-settings', async (_req, res) => {
 app.get('/api/promotions', async (_req, res) => {
   try { const coupons = await firestoreCollection('coupons'); if (coupons) return res.json({ coupons: coupons.filter(coupon => coupon.active !== 0 && coupon.active !== false) }); } catch (error) { console.warn(`Firestore coupon read skipped: ${error.message}`); }
   res.json({ coupons: db.prepare("SELECT code,discount_type,discount_value,min_order_cents FROM coupons WHERE active = 1 ORDER BY created_at DESC").all() });
+});
+app.post('/api/feedback', async (req, res) => {
+  const { name, email = '', rating, message } = req.body || {};
+  const cleanName = String(name || '').trim(); const cleanMessage = String(message || '').trim(); const cleanRating = Number(rating);
+  if (!cleanName || !cleanMessage || !Number.isInteger(cleanRating) || cleanRating < 1 || cleanRating > 5) return res.status(400).json({ error: 'Please provide your name, a rating, and feedback.' });
+  const result = db.prepare('INSERT INTO feedback (name,email,rating,message) VALUES (?,?,?,?)').run(cleanName, String(email || '').trim().toLowerCase(), cleanRating, cleanMessage);
+  const feedback = db.prepare('SELECT * FROM feedback WHERE id = ?').get(result.lastInsertRowid);
+  await firebaseUpsert('feedback', feedback.id, feedback);
+  res.status(201).json({ feedback });
 });
 app.get('/api/admin/products', auth, role('admin', 'owner'), async (_req, res) => {
   try { res.json({ products: (await firestoreProducts()) || localProducts() }); }
