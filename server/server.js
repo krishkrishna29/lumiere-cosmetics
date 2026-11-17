@@ -123,6 +123,8 @@ Promise.all(db.prepare('SELECT * FROM products').all().map(product => firebaseUp
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
 app.use(express.json({ limit: '1mb' }));
+app.get('/', (_req, res) => res.json({ service: 'Lumière Cosmetics API', status: 'ok', storefront: 'https://mywebsite-eo3.pages.dev' }));
+app.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 
 const signToken = user => jwt.sign({ sub: user.id, role: user.role, email: user.email, name: user.name }, process.env.JWT_SECRET || 'local-dev-only-change-this', { expiresIn: '8h' });
 const auth = (req, res, next) => {
