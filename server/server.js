@@ -174,7 +174,10 @@ const auth = (req, res, next) => {
 const role = (...roles) => (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({ error: 'Insufficient permissions.' });
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'lumiere-api', database: firebaseEnabled() ? 'firestore' : 'sqlite-fallback' }));
-app.get('/api/storage', async (_req, res) => {
+// Render uses this lightweight endpoint as a health check. Keep it independent of
+// remote database availability so deployments do not stall.
+app.get('/api/storage', (_req, res) => res.json(firebaseInfo()));
+app.get('/api/storage/diagnostics', async (_req, res) => {
   try { res.json({ ...firebaseInfo(), firestoreProductCount: firebaseEnabled() ? (await firebaseList('products')).length : 0 }); }
   catch (error) { res.json({ ...firebaseInfo(), firestoreProductCount: null, error: error.message }); }
 });

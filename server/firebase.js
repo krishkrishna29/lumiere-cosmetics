@@ -8,7 +8,9 @@ const withTimeout = (operation, label) => Promise.race([
   new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${FIREBASE_TIMEOUT_MS / 1000} seconds`)), FIREBASE_TIMEOUT_MS))
 ]);
 const hasServiceAccountKey = Boolean(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY);
-const hasApplicationDefaultCredentials = Boolean(process.env.FIREBASE_PROJECT_ID);
+// Application Default Credentials work on Google Cloud or a local gcloud session,
+// but are not automatically available in Render. Opt in explicitly when present.
+const hasApplicationDefaultCredentials = process.env.FIREBASE_USE_APPLICATION_DEFAULT === 'true';
 
 if (hasServiceAccountKey || hasApplicationDefaultCredentials) {
   try {
@@ -31,7 +33,7 @@ if (hasServiceAccountKey || hasApplicationDefaultCredentials) {
     console.warn(`Firebase disabled: ${error.message}`);
   }
 } else {
-  console.log('Firebase not configured; using local SQLite fallback');
+  console.log('Firebase service credentials not configured; using local SQLite fallback');
 }
 
 export const firebaseEnabled = () => Boolean(firestore);
