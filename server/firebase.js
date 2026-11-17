@@ -2,6 +2,11 @@ import admin from 'firebase-admin';
 
 let firestore = null;
 let authMode = 'sqlite-fallback';
+const FIREBASE_TIMEOUT_MS = 8000;
+const withTimeout = (operation, label) => Promise.race([
+  operation,
+  new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${FIREBASE_TIMEOUT_MS / 1000} seconds`)), FIREBASE_TIMEOUT_MS))
+]);
 const hasServiceAccountKey = Boolean(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY);
 const hasApplicationDefaultCredentials = Boolean(process.env.FIREBASE_PROJECT_ID);
 
@@ -34,25 +39,25 @@ export const firebaseInfo = () => ({ enabled: Boolean(firestore), provider: fire
 
 export async function firebaseGet(collection, id) {
   if (!firestore) return null;
-  const snapshot = await firestore.collection(collection).doc(String(id)).get();
+  const snapshot = await withTimeout(firestore.collection(collection).doc(String(id)).get(), `Firestore read for ${collection}/${id}`);
   return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
 }
 
 export async function firebaseList(collection) {
   if (!firestore) return [];
-  const snapshot = await firestore.collection(collection).get();
+  const snapshot = await withTimeout(firestore.collection(collection).get(), `Firestore read for ${collection}`);
   return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 }
 
 export async function firebaseUpsert(collection, id, data) {
   if (!firestore) return;
-  try { await firestore.collection(collection).doc(String(id)).set({ ...data, syncedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); }
+  try { await withTimeout(firestore.collection(collection).doc(String(id)).set({ ...data, syncedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }), `Firestore write for ${collection}/${id}`); }
   catch (error) { console.warn(`Firebase write skipped: ${error.message}`); }
 }
 
 export async function firebaseDelete(collection, id) {
   if (!firestore) return;
-  try { await firestore.collection(collection).doc(String(id)).delete(); }
+  try { await withTimeout(firestore.collection(collection).doc(String(id)).delete(), `Firestore delete for ${collection}/${id}`); }
   catch (error) { console.warn(`Firebase delete skipped: ${error.message}`); }
 }
 

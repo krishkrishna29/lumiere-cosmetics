@@ -146,7 +146,9 @@ async function loadFirestoreData() {
   }
 }
 
-await loadFirestoreData().catch(error => console.warn(`Firestore read sync skipped: ${error.message}`));
+// Never block the web-service startup on a remote database call. Render needs the
+// HTTP listener to become available promptly; data reconciliation continues in the background.
+void loadFirestoreData().catch(error => console.warn(`Firestore read sync skipped: ${error.message}`));
 // Repair legacy MRP values that were imported as rupees instead of cents.
 const legacyMrpRows = db.prepare('SELECT * FROM products WHERE price_cents > 10000 AND compare_at_cents > 0 AND compare_at_cents < 10000').all();
 if (legacyMrpRows.length) {
