@@ -32,6 +32,18 @@ if (hasServiceAccountKey || hasApplicationDefaultCredentials) {
 export const firebaseEnabled = () => Boolean(firestore);
 export const firebaseInfo = () => ({ enabled: Boolean(firestore), provider: firestore ? 'firestore' : 'sqlite-fallback', auth: authMode });
 
+export async function firebaseGet(collection, id) {
+  if (!firestore) return null;
+  const snapshot = await firestore.collection(collection).doc(String(id)).get();
+  return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
+}
+
+export async function firebaseList(collection) {
+  if (!firestore) return [];
+  const snapshot = await firestore.collection(collection).get();
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
 export async function firebaseUpsert(collection, id, data) {
   if (!firestore) return;
   try { await firestore.collection(collection).doc(String(id)).set({ ...data, syncedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); }

@@ -7,7 +7,7 @@ const API_BASE_URL = import.meta.env.PROD ? (import.meta.env.VITE_API_BASE_URL |
 const browserFetch = window.fetch.bind(window);
 const fetch = (input, init) => {
   const path = typeof input === 'string' ? input : input?.url;
-  return path?.startsWith('/api/') ? browserFetch(`${API_BASE_URL}${path}`, init) : browserFetch(input, init);
+  return path?.startsWith('/api/') ? browserFetch(`${API_BASE_URL}${path}`, { ...(init || {}), cache: 'no-store' }) : browserFetch(input, init);
 };
 
 const demoProducts = [

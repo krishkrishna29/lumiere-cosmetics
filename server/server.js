@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { firebaseDelete, firebaseInfo, firebaseUpsert } from './firebase.js';
+import { firebaseDelete, firebaseEnabled, firebaseGet, firebaseInfo, firebaseList, firebaseUpsert } from './firebase.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const db = new Database(path.join(__dirname, 'lumiere.sqlite'));
@@ -120,9 +120,38 @@ const indiaPriceMigration = new Map([['Cloud Skin Tint', 249900], ['Rosewater Cr
 for (const [name, price] of indiaPriceMigration) db.prepare('UPDATE products SET price_cents = ? WHERE name = ? AND price_cents IN (2200,2400,2600,2900,3200,3600)').run(price, name);
 Promise.all(db.prepare('SELECT * FROM products').all().map(product => firebaseUpsert('products', product.id, product))).catch(error => console.warn(`Firebase seed sync skipped: ${error.message}`));
 
+async function loadFirestoreData() {
+  if (!firebaseEnabled()) return;
+  const [remoteProducts, remoteSettings] = await Promise.all([
+    firebaseList('products'),
+    firebaseGet('settings', 'store')
+  ]);
+  if (remoteProducts.length) {
+    const upsert = db.prepare(`INSERT INTO products (id,name,type,price_cents,compare_at_cents,shade,image,description,inventory,active,created_at)
+      VALUES (@id,@name,@type,@price_cents,@compare_at_cents,@shade,@image,@description,@inventory,@active,COALESCE(@created_at,CURRENT_TIMESTAMP))
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,price_cents=excluded.price_cents,compare_at_cents=excluded.compare_at_cents,shade=excluded.shade,image=excluded.image,description=excluded.description,inventory=excluded.inventory,active=excluded.active`);
+    const syncProducts = db.transaction(rows => rows.forEach(product => upsert.run({
+      id: Number(product.id), name: product.name || 'Untitled product', type: product.type || 'Skincare',
+      price_cents: Number(product.price_cents || 0), compare_at_cents: product.compare_at_cents == null ? null : Number(product.compare_at_cents),
+      shade: product.shade || '', image: product.image || '', description: product.description || '', inventory: Number(product.inventory || 0),
+      active: product.active === false || product.active === 0 ? 0 : 1, created_at: product.created_at || null
+    })));
+    syncProducts(remoteProducts);
+    console.log(`Loaded ${remoteProducts.length} products from Firestore`);
+  }
+  if (remoteSettings) {
+    const saveRemoteSetting = db.prepare('INSERT INTO store_settings (key,value,updated_at) VALUES (?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP');
+    const syncSettings = db.transaction(settings => Object.entries(settings).filter(([key]) => key !== 'id' && key !== 'syncedAt').forEach(([key, value]) => saveRemoteSetting.run(key, String(value ?? ''))));
+    syncSettings(remoteSettings);
+  }
+}
+
+await loadFirestoreData().catch(error => console.warn(`Firestore read sync skipped: ${error.message}`));
+
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
 app.use(express.json({ limit: '1mb' }));
+app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store, max-age=0'); next(); });
 app.get('/', (_req, res) => res.json({ service: 'Lumière Cosmetics API', status: 'ok', storefront: 'https://mywebsite-eo3.pages.dev' }));
 app.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 
@@ -136,7 +165,7 @@ const auth = (req, res, next) => {
 };
 const role = (...roles) => (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({ error: 'Insufficient permissions.' });
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'lumiere-api', database: 'sqlite' }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'lumiere-api', database: firebaseEnabled() ? 'firestore' : 'sqlite-fallback' }));
 app.get('/api/storage', (_req, res) => res.json(firebaseInfo()));
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
@@ -271,8 +300,8 @@ app.delete('/api/admin/products/:id', auth, role('owner'), async (req, res) => {
 app.get('/api/admin/customers', auth, role('admin', 'owner'), (_req, res) => res.json({ customers: db.prepare("SELECT id,name,email,role,created_at FROM users WHERE role = 'customer' ORDER BY created_at DESC").all() }));
 app.get('/api/admin/customers/:id', auth, role('admin', 'owner'), (req, res) => { const customer = db.prepare("SELECT id,name,email,role,created_at FROM users WHERE id = ? AND role = 'customer'").get(req.params.id); if (!customer) return res.status(404).json({ error: 'Customer not found.' }); const orders = db.prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC').all(customer.id).map(order => ({ ...order, items: db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id) })); res.json({ customer, orders }); });
 app.get('/api/admin/coupons', auth, role('admin', 'owner'), (_req, res) => res.json({ coupons: db.prepare('SELECT * FROM coupons ORDER BY created_at DESC').all() }));
-app.post('/api/admin/coupons', auth, role('admin', 'owner'), (req, res) => { const { code, discountType = 'percent', discountValue, minOrderCents = 0 } = req.body || {}; const normalized = String(code || '').trim().toUpperCase(); if (!normalized || !['percent','fixed'].includes(discountType) || !Number.isInteger(Number(discountValue))) return res.status(400).json({ error: 'Code, discount type, and integer discount value are required.' }); try { const result = db.prepare('INSERT INTO coupons (code,discount_type,discount_value,min_order_cents) VALUES (?,?,?,?)').run(normalized, discountType, Number(discountValue), Number(minOrderCents)); res.status(201).json({ coupon: db.prepare('SELECT * FROM coupons WHERE id = ?').get(result.lastInsertRowid) }); } catch { res.status(409).json({ error: 'That coupon code already exists.' }); } });
-app.patch('/api/admin/coupons/:id', auth, role('admin', 'owner'), (req, res) => { const result = db.prepare('UPDATE coupons SET active = COALESCE(?,active) WHERE id = ?').run(req.body?.active, req.params.id); if (!result.changes) return res.status(404).json({ error: 'Coupon not found.' }); res.json({ coupon: db.prepare('SELECT * FROM coupons WHERE id = ?').get(req.params.id) }); });
+app.post('/api/admin/coupons', auth, role('admin', 'owner'), async (req, res) => { const { code, discountType = 'percent', discountValue, minOrderCents = 0 } = req.body || {}; const normalized = String(code || '').trim().toUpperCase(); if (!normalized || !['percent','fixed'].includes(discountType) || !Number.isInteger(Number(discountValue))) return res.status(400).json({ error: 'Code, discount type, and integer discount value are required.' }); try { const result = db.prepare('INSERT INTO coupons (code,discount_type,discount_value,min_order_cents) VALUES (?,?,?,?)').run(normalized, discountType, Number(discountValue), Number(minOrderCents)); const coupon = db.prepare('SELECT * FROM coupons WHERE id = ?').get(result.lastInsertRowid); await firebaseUpsert('coupons', coupon.id, coupon); res.status(201).json({ coupon }); } catch { res.status(409).json({ error: 'That coupon code already exists.' }); } });
+app.patch('/api/admin/coupons/:id', auth, role('admin', 'owner'), async (req, res) => { const result = db.prepare('UPDATE coupons SET active = COALESCE(?,active) WHERE id = ?').run(req.body?.active, req.params.id); if (!result.changes) return res.status(404).json({ error: 'Coupon not found.' }); const coupon = db.prepare('SELECT * FROM coupons WHERE id = ?').get(req.params.id); await firebaseUpsert('coupons', coupon.id, coupon); res.json({ coupon }); });
 app.get('/api/admin/settings', auth, role('admin', 'owner'), (_req, res) => { const rows = db.prepare('SELECT key,value FROM store_settings').all(); res.json({ settings: Object.fromEntries(rows.map(row => [row.key, row.value])) }); });
 app.patch('/api/admin/settings', auth, role('admin', 'owner'), async (req, res) => { const allowed = Object.keys(defaultSettings); const update = db.prepare('INSERT INTO store_settings (key,value,updated_at) VALUES (?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP'); const entries = Object.entries(req.body || {}).filter(([key, value]) => allowed.includes(key) && value !== undefined).map(([key, value]) => [key, String(value)]); const transaction = db.transaction(() => entries.forEach(([key, value]) => update.run(key, value))); transaction(); const settings = Object.fromEntries(db.prepare('SELECT key,value FROM store_settings').all().map(row => [row.key, row.value])); await firebaseUpsert('settings', 'store', settings); res.json({ settings }); });
 app.get('/api/admin/orders', auth, role('admin', 'owner'), (_req, res) => res.json({ orders: db.prepare('SELECT orders.*, users.name, users.email FROM orders LEFT JOIN users ON users.id = orders.user_id ORDER BY orders.created_at DESC').all() }));
