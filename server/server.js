@@ -290,6 +290,18 @@ const firestoreProducts = async () => {
     active: product.active === false || product.active === 0 ? 0 : 1, created_at: product.created_at || null
   }));
 };
+const firestoreCollection = async collection => firebaseEnabled() ? firebaseList(collection) : null;
+const firestoreSettings = async () => firebaseEnabled() ? firebaseGet('settings', 'store') : null;
+const firestoreUsers = async () => {
+  const users = await firestoreCollection('users');
+  return users?.map(user => ({ id: Number(user.id || 0), name: user.name || 'Customer', email: user.email || '', role: user.role || 'customer', created_at: user.created_at || user.createdAt || null })) || null;
+};
+const firestoreOrders = async () => {
+  const [orders, users] = await Promise.all([firestoreCollection('orders'), firestoreUsers()]);
+  if (!orders) return null;
+  const userById = new Map((users || []).map(user => [Number(user.id), user]));
+  return orders.map(order => ({ ...order, id: Number(order.id || 0), user_id: Number(order.user_id || 0), name: order.name || userById.get(Number(order.user_id))?.name || 'Customer', email: order.email || userById.get(Number(order.user_id))?.email || '', created_at: order.created_at || null, total_cents: Number(order.total_cents || 0), items: order.items || [] })).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+};
 app.get('/api/products', async (_req, res) => {
   try {
     const products = (await firestoreProducts()) || localProducts();
@@ -299,11 +311,15 @@ app.get('/api/products', async (_req, res) => {
     res.json({ products: localProducts().filter(product => product.active !== 0) });
   }
 });
-app.get('/api/store-settings', (_req, res) => {
+app.get('/api/store-settings', async (_req, res) => {
+  try { const settings = await firestoreSettings(); if (settings) return res.json({ settings }); } catch (error) { console.warn(`Firestore settings read skipped: ${error.message}`); }
   const rows = db.prepare("SELECT key,value FROM store_settings WHERE key IN ('store_name','currency','upi_id')").all();
   res.json({ settings: Object.fromEntries(rows.map(row => [row.key, row.value])) });
 });
-app.get('/api/promotions', (_req, res) => res.json({ coupons: db.prepare("SELECT code,discount_type,discount_value,min_order_cents FROM coupons WHERE active = 1 ORDER BY created_at DESC").all() }));
+app.get('/api/promotions', async (_req, res) => {
+  try { const coupons = await firestoreCollection('coupons'); if (coupons) return res.json({ coupons: coupons.filter(coupon => coupon.active !== 0 && coupon.active !== false) }); } catch (error) { console.warn(`Firestore coupon read skipped: ${error.message}`); }
+  res.json({ coupons: db.prepare("SELECT code,discount_type,discount_value,min_order_cents FROM coupons WHERE active = 1 ORDER BY created_at DESC").all() });
+});
 app.get('/api/admin/products', auth, role('admin', 'owner'), async (_req, res) => {
   try { res.json({ products: (await firestoreProducts()) || localProducts() }); }
   catch (error) { console.warn(`Firestore admin product read skipped: ${error.message}`); res.json({ products: localProducts() }); }
@@ -330,15 +346,16 @@ app.delete('/api/admin/products/:id', auth, role('owner'), async (req, res) => {
   await firebaseDelete('products', req.params.id);
   res.status(204).end();
 });
-app.get('/api/admin/customers', auth, role('admin', 'owner'), (_req, res) => res.json({ customers: db.prepare("SELECT id,name,email,role,created_at FROM users WHERE role = 'customer' ORDER BY created_at DESC").all() }));
-app.get('/api/admin/customers/:id', auth, role('admin', 'owner'), (req, res) => { const customer = db.prepare("SELECT id,name,email,role,created_at FROM users WHERE id = ? AND role = 'customer'").get(req.params.id); if (!customer) return res.status(404).json({ error: 'Customer not found.' }); const orders = db.prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC').all(customer.id).map(order => ({ ...order, items: db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id) })); res.json({ customer, orders }); });
-app.get('/api/admin/coupons', auth, role('admin', 'owner'), (_req, res) => res.json({ coupons: db.prepare('SELECT * FROM coupons ORDER BY created_at DESC').all() }));
+app.get('/api/admin/customers', auth, role('admin', 'owner'), async (_req, res) => { try { const customers = await firestoreUsers(); if (customers) return res.json({ customers: customers.filter(customer => customer.role === 'customer') }); } catch (error) { console.warn(`Firestore customer read skipped: ${error.message}`); } res.json({ customers: db.prepare("SELECT id,name,email,role,created_at FROM users WHERE role = 'customer' ORDER BY created_at DESC").all() }); });
+app.get('/api/admin/customers/:id', auth, role('admin', 'owner'), async (req, res) => { try { const customers = await firestoreUsers(); const customer = customers?.find(item => Number(item.id) === Number(req.params.id)); if (customer) { const orders = (await firestoreOrders() || []).filter(order => Number(order.user_id) === Number(customer.id)); return res.json({ customer, orders }); } } catch (error) { console.warn(`Firestore customer detail read skipped: ${error.message}`); } const customer = db.prepare("SELECT id,name,email,role,created_at FROM users WHERE id = ? AND role = 'customer'").get(req.params.id); if (!customer) return res.status(404).json({ error: 'Customer not found.' }); const orders = db.prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC').all(customer.id).map(order => ({ ...order, items: db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id) })); res.json({ customer, orders }); });
+app.get('/api/admin/coupons', auth, role('admin', 'owner'), async (_req, res) => { try { const coupons = await firestoreCollection('coupons'); if (coupons) return res.json({ coupons }); } catch (error) { console.warn(`Firestore coupon admin read skipped: ${error.message}`); } res.json({ coupons: db.prepare('SELECT * FROM coupons ORDER BY created_at DESC').all() }); });
 app.post('/api/admin/coupons', auth, role('admin', 'owner'), async (req, res) => { const { code, discountType = 'percent', discountValue, minOrderCents = 0 } = req.body || {}; const normalized = String(code || '').trim().toUpperCase(); if (!normalized || !['percent','fixed'].includes(discountType) || !Number.isInteger(Number(discountValue))) return res.status(400).json({ error: 'Code, discount type, and integer discount value are required.' }); try { const result = db.prepare('INSERT INTO coupons (code,discount_type,discount_value,min_order_cents) VALUES (?,?,?,?)').run(normalized, discountType, Number(discountValue), Number(minOrderCents)); const coupon = db.prepare('SELECT * FROM coupons WHERE id = ?').get(result.lastInsertRowid); await firebaseUpsert('coupons', coupon.id, coupon); res.status(201).json({ coupon }); } catch { res.status(409).json({ error: 'That coupon code already exists.' }); } });
 app.patch('/api/admin/coupons/:id', auth, role('admin', 'owner'), async (req, res) => { const result = db.prepare('UPDATE coupons SET active = COALESCE(?,active) WHERE id = ?').run(req.body?.active, req.params.id); if (!result.changes) return res.status(404).json({ error: 'Coupon not found.' }); const coupon = db.prepare('SELECT * FROM coupons WHERE id = ?').get(req.params.id); await firebaseUpsert('coupons', coupon.id, coupon); res.json({ coupon }); });
-app.get('/api/admin/settings', auth, role('admin', 'owner'), (_req, res) => { const rows = db.prepare('SELECT key,value FROM store_settings').all(); res.json({ settings: Object.fromEntries(rows.map(row => [row.key, row.value])) }); });
+app.get('/api/admin/settings', auth, role('admin', 'owner'), async (_req, res) => { try { const settings = await firestoreSettings(); if (settings) return res.json({ settings }); } catch (error) { console.warn(`Firestore admin settings read skipped: ${error.message}`); } const rows = db.prepare('SELECT key,value FROM store_settings').all(); res.json({ settings: Object.fromEntries(rows.map(row => [row.key, row.value])) }); });
 app.patch('/api/admin/settings', auth, role('admin', 'owner'), async (req, res) => { const allowed = Object.keys(defaultSettings); const update = db.prepare('INSERT INTO store_settings (key,value,updated_at) VALUES (?,?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP'); const entries = Object.entries(req.body || {}).filter(([key, value]) => allowed.includes(key) && value !== undefined).map(([key, value]) => [key, String(value)]); const transaction = db.transaction(() => entries.forEach(([key, value]) => update.run(key, value))); transaction(); const settings = Object.fromEntries(db.prepare('SELECT key,value FROM store_settings').all().map(row => [row.key, row.value])); await firebaseUpsert('settings', 'store', settings); res.json({ settings }); });
-app.get('/api/admin/orders', auth, role('admin', 'owner'), (_req, res) => res.json({ orders: db.prepare('SELECT orders.*, users.name, users.email FROM orders LEFT JOIN users ON users.id = orders.user_id ORDER BY orders.created_at DESC').all() }));
-app.get('/api/admin/overview', auth, role('admin', 'owner'), (_req, res) => {
+app.get('/api/admin/orders', auth, role('admin', 'owner'), async (_req, res) => { try { const orders = await firestoreOrders(); if (orders) return res.json({ orders }); } catch (error) { console.warn(`Firestore order read skipped: ${error.message}`); } res.json({ orders: db.prepare('SELECT orders.*, users.name, users.email FROM orders LEFT JOIN users ON users.id = orders.user_id ORDER BY orders.created_at DESC').all() }); });
+app.get('/api/admin/overview', auth, role('admin', 'owner'), async (_req, res) => {
+  try { const [products, customers, orders] = await Promise.all([firestoreProducts(), firestoreUsers(), firestoreOrders()]); if (products && customers && orders) return res.json({ metrics: { products: products.filter(product => product.active !== 0).length, customers: customers.filter(customer => customer.role === 'customer').length, orders: orders.length, revenueCents: orders.reduce((total, order) => total + Number(order.total_cents || 0), 0) } }); } catch (error) { console.warn(`Firestore overview read skipped: ${error.message}`); }
   const products = db.prepare('SELECT COUNT(*) AS count FROM products WHERE active = 1').get().count;
   const customers = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'customer'").get().count;
   const orders = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(total_cents),0) AS revenue FROM orders').get();
