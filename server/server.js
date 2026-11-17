@@ -172,7 +172,10 @@ const auth = (req, res, next) => {
 const role = (...roles) => (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({ error: 'Insufficient permissions.' });
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'lumiere-api', database: firebaseEnabled() ? 'firestore' : 'sqlite-fallback' }));
-app.get('/api/storage', (_req, res) => res.json(firebaseInfo()));
+app.get('/api/storage', async (_req, res) => {
+  try { res.json({ ...firebaseInfo(), firestoreProductCount: firebaseEnabled() ? (await firebaseList('products')).length : 0 }); }
+  catch (error) { res.json({ ...firebaseInfo(), firestoreProductCount: null, error: error.message }); }
+});
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });

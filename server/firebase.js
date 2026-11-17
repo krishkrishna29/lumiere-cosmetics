@@ -30,7 +30,7 @@ if (hasServiceAccountKey || hasApplicationDefaultCredentials) {
 }
 
 export const firebaseEnabled = () => Boolean(firestore);
-export const firebaseInfo = () => ({ enabled: Boolean(firestore), provider: firestore ? 'firestore' : 'sqlite-fallback', auth: authMode });
+export const firebaseInfo = () => ({ enabled: Boolean(firestore), provider: firestore ? 'firestore' : 'sqlite-fallback', auth: authMode, projectId: process.env.FIREBASE_PROJECT_ID || null });
 
 export async function firebaseGet(collection, id) {
   if (!firestore) return null;
