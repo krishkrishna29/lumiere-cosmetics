@@ -56,7 +56,7 @@ function App() {
           old: product.compare_at_cents ? product.compare_at_cents / 100 : null,
           shade: product.shade || '',
           image: product.image || '',
-          tag: null,
+          tag: product.compare_at_cents && product.compare_at_cents > product.price_cents ? `${Math.round((1 - product.price_cents / product.compare_at_cents) * 100)}% off` : null,
           desc: product.description || ''
         })));
       })
@@ -116,6 +116,7 @@ function Storefront({ category, setCategory, filtered, productsLoading, addToCar
     <CustomerAccount open={accountOpen} customer={customer} onClose={() => setAccountOpen(false)} onLogin={(user, nextToken) => { localStorage.setItem('lumiere_token', nextToken); localStorage.setItem('lumiere_user', JSON.stringify(user)); setCustomer(user); }} onLogout={() => { localStorage.removeItem('lumiere_token'); localStorage.removeItem('lumiere_user'); setCustomer(null); }} />
     {selectedProduct && <ProductDetailsModal product={selectedProduct} onClose={() => setSelectedProduct(null)} onAdd={() => { addToCart(selectedProduct); setSelectedProduct(null); }} />}
     <CheckoutModal open={checkoutOpen} cart={cart} customer={customer} promotions={promotions} upiId={storeSettings.upi_id} storeName={storeSettings.store_name} onClose={() => setCheckoutOpen(false)} onNeedLogin={() => { setCheckoutOpen(false); setAccountOpen(true); }} onComplete={(order) => { setCart([]); setCheckoutOpen(false); setAccountOpen(true); }} />
+    <nav className="mobile-bottom-nav"><button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><LayoutDashboard size={20}/><span>Home</span></button><button onClick={() => document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })}><Boxes size={20}/><span>Shop</span></button><button onClick={() => setCartOpen(true)}><ShoppingBag size={20}/><span>Bag{cart.length ? ` (${cart.length})` : ''}</span></button><button onClick={() => setAccountOpen(true)}><UserRound size={20}/><span>Account</span></button></nav>
     {toast && <div className="toast"><Check size={16}/> {toast}</div>}
   </div>;
 }
