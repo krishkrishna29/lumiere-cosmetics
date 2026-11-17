@@ -3,6 +3,13 @@ import { createRoot } from 'react-dom/client';
 import { Search, ShoppingBag, UserRound, Menu, X, ArrowRight, ChevronDown, Heart, Plus, Package, Users, TicketPercent, LayoutDashboard, Boxes, Truck, Settings, BarChart3, MoreHorizontal, Bell, LogOut, Check, Sparkles } from 'lucide-react';
 import './styles.css';
 
+const API_BASE_URL = import.meta.env.PROD ? (import.meta.env.VITE_API_BASE_URL || 'https://lumiere-cosmetics-vl5x.onrender.com') : '';
+const browserFetch = window.fetch.bind(window);
+const fetch = (input, init) => {
+  const path = typeof input === 'string' ? input : input?.url;
+  return path?.startsWith('/api/') ? browserFetch(`${API_BASE_URL}${path}`, init) : browserFetch(input, init);
+};
+
 const demoProducts = [
   { id: 1, name: 'Cloud Skin Tint', type: 'Complexion', price: 2499, old: 2999, shade: '12 shades', image: 'https://images.unsplash.com/photo-1631214524020-7e18db9d6f1f?auto=format&fit=crop&w=900&q=80', tag: 'Bestseller', desc: 'Weightless, skin-loving coverage with a fresh, second-skin finish.' },
   { id: 2, name: 'Rosewater Cream Blush', type: 'Cheeks', price: 1899, old: 2199, shade: '6 shades', image: 'https://images.unsplash.com/photo-1583241800698-e8ab01830a9a?auto=format&fit=crop&w=900&q=80', tag: 'New', desc: 'A sheer wash of buildable color that melts into skin.' },
