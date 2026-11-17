@@ -147,6 +147,12 @@ async function loadFirestoreData() {
 }
 
 await loadFirestoreData().catch(error => console.warn(`Firestore read sync skipped: ${error.message}`));
+// Repair legacy MRP values that were imported as rupees instead of cents.
+const legacyMrpRows = db.prepare('SELECT * FROM products WHERE price_cents > 10000 AND compare_at_cents > 0 AND compare_at_cents < 10000').all();
+if (legacyMrpRows.length) {
+  db.prepare('UPDATE products SET compare_at_cents = compare_at_cents * 100 WHERE price_cents > 10000 AND compare_at_cents > 0 AND compare_at_cents < 10000').run();
+  await Promise.all(legacyMrpRows.map(row => firebaseUpsert('products', row.id, db.prepare('SELECT * FROM products WHERE id = ?').get(row.id))));
+}
 
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
