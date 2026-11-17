@@ -33,11 +33,11 @@ The app now includes a local Express + SQLite backend with JWT authentication, p
 To enable Firebase:
 
 1. Create a Firebase project and enable Firestore in production mode.
-2. Create a service account under Project settings → Service accounts and generate a private key.
-3. Copy the project ID, service-account email, private key, and storage bucket into `.env` using `.env.example` as the template.
+2. Create a service account under Project settings → Service accounts and generate a private key. Give it the **Cloud Datastore User** role.
+3. In Render, add the entire downloaded JSON as the secret `FIREBASE_SERVICE_ACCOUNT_JSON`. Alternatively, use the individual service-account fields in `.env.example`.
 4. Restart `npm run server` and verify `http://127.0.0.1:4000/api/storage` returns `{"enabled":true,"provider":"firestore"}`.
 
-If service-account key creation is blocked by organization policy, use Application Default Credentials instead. Add only `FIREBASE_PROJECT_ID=lumiere-cosmetics` to `.env`, install the Google Cloud CLI, run `gcloud auth application-default login`, and restart the server. In production, attach the `lumiere-backend` service account directly to Cloud Run or the hosting service instead of creating a private key.
+If service-account key creation is blocked by organization policy, a Google Cloud Organization Policy Administrator must permit service-account keys for this project or provide a supported workload-identity configuration. Application Default Credentials from a local computer do not transfer to Render.
 
 Before launch:
 

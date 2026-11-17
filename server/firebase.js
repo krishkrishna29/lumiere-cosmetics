@@ -7,7 +7,10 @@ const withTimeout = (operation, label) => Promise.race([
   operation,
   new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${FIREBASE_TIMEOUT_MS / 1000} seconds`)), FIREBASE_TIMEOUT_MS))
 ]);
-const hasServiceAccountKey = Boolean(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY);
+let serviceAccountJson = null;
+try { serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON) : null; }
+catch { console.warn('FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON; Firebase is disabled until it is corrected.'); }
+const hasServiceAccountKey = Boolean(serviceAccountJson || (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY));
 // Application Default Credentials work on Google Cloud or a local gcloud session,
 // but are not automatically available in Render. Opt in explicitly when present.
 const hasApplicationDefaultCredentials = process.env.FIREBASE_USE_APPLICATION_DEFAULT === 'true';
@@ -15,7 +18,7 @@ const hasApplicationDefaultCredentials = process.env.FIREBASE_USE_APPLICATION_DE
 if (hasServiceAccountKey || hasApplicationDefaultCredentials) {
   try {
     const credential = hasServiceAccountKey
-      ? admin.credential.cert({
+      ? admin.credential.cert(serviceAccountJson || {
           projectId: process.env.FIREBASE_PROJECT_ID,
           clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
           privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
@@ -27,7 +30,7 @@ if (hasServiceAccountKey || hasApplicationDefaultCredentials) {
       storageBucket: process.env.FIREBASE_STORAGE_BUCKET || undefined
     });
     firestore = admin.firestore();
-    authMode = hasServiceAccountKey ? 'service-account-key' : 'application-default-credentials';
+    authMode = hasServiceAccountKey ? (serviceAccountJson ? 'service-account-json' : 'service-account-key') : 'application-default-credentials';
     console.log(`Firebase Firestore enabled via ${authMode}`);
   } catch (error) {
     console.warn(`Firebase disabled: ${error.message}`);
