@@ -288,6 +288,7 @@ app.patch('/api/admin/orders/:id/status', auth, role('admin', 'owner'), async (r
 });
 
 const localProducts = () => db.prepare('SELECT id,name,type,price_cents,compare_at_cents,shade,image,description,inventory,active,created_at FROM products ORDER BY id').all();
+const isValidProductImage = image => !image || (/^https:\/\//i.test(image) || (/^data:image\/(webp|jpeg|png);base64,/i.test(image) && Buffer.byteLength(image, 'utf8') <= 700000));
 const firestoreProducts = async () => {
   if (!firebaseEnabled()) return null;
   const remote = await firebaseList('products');
@@ -344,6 +345,7 @@ app.get('/api/admin/products', auth, role('admin', 'owner'), async (_req, res) =
 app.post('/api/admin/products', auth, role('admin', 'owner'), async (req, res) => {
   const { name, type, priceCents, compareAtCents = null, shade = '', image = '', description = '', inventory = 0 } = req.body || {};
   if (!name || !type || !Number.isInteger(priceCents)) return res.status(400).json({ error: 'name, type, and integer priceCents are required.' });
+  if (!isValidProductImage(image)) return res.status(400).json({ error: 'Use an HTTPS image URL or an optimized image under 700 KB.' });
   const result = db.prepare('INSERT INTO products (name,type,price_cents,compare_at_cents,shade,image,description,inventory) VALUES (?,?,?,?,?,?,?,?)').run(name, type, priceCents, compareAtCents, shade, image, description, inventory);
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(result.lastInsertRowid);
   await firebaseUpsert('products', product.id, product);
@@ -351,6 +353,7 @@ app.post('/api/admin/products', auth, role('admin', 'owner'), async (req, res) =
 });
 app.patch('/api/admin/products/:id', auth, role('admin', 'owner'), async (req, res) => {
   const { name, type, priceCents, compareAtCents, inventory, shade, image, description, active } = req.body || {};
+  if (image !== undefined && !isValidProductImage(image)) return res.status(400).json({ error: 'Use an HTTPS image URL or an optimized image under 700 KB.' });
   const result = db.prepare('UPDATE products SET name = COALESCE(?,name), type = COALESCE(?,type), price_cents = COALESCE(?,price_cents), compare_at_cents = COALESCE(?,compare_at_cents), inventory = COALESCE(?,inventory), shade = COALESCE(?,shade), image = COALESCE(?,image), description = COALESCE(?,description), active = COALESCE(?,active) WHERE id = ?').run(name, type, priceCents, compareAtCents, inventory, shade, image, description, active, req.params.id);
   if (!result.changes) return res.status(404).json({ error: 'Product not found.' });
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
