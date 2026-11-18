@@ -76,10 +76,18 @@ db.exec(`
     message TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 const defaultSettings = { store_name: 'Danus Cosmetics', store_email: 'hello@lumiere.example', currency: 'INR', low_stock_alerts: 'true', customer_reviews: 'true', upi_id: '' };
 const saveSetting = db.prepare('INSERT OR IGNORE INTO store_settings (key,value) VALUES (?,?)');
 Object.entries(defaultSettings).forEach(([key, value]) => saveSetting.run(key, value));
+const defaultCategories = ['Complexion', 'Cheeks', 'Lips', 'Glow', 'Skincare', 'Jewelry', 'Nail Polish', 'Eye Liner'];
+const saveCategory = db.prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
+defaultCategories.forEach(name => saveCategory.run(name));
 const productColumns = db.prepare('PRAGMA table_info(products)').all().map(column => column.name);
 if (!productColumns.includes('description')) db.exec('ALTER TABLE products ADD COLUMN description TEXT');
 const orderColumns = db.prepare('PRAGMA table_info(orders)').all().map(column => column.name);
@@ -126,7 +134,10 @@ if (!productCount) {
 // When Firebase is configured, mirror the local seed data into Firestore on startup.
 const indiaPriceMigration = new Map([['Cloud Skin Tint', 249900], ['Rosewater Cream Blush', 189900], ['Soft Focus Bronzer', 229900], ['Satin Lip Veil', 159900], ['Lustre Balm Highlighter', 199900], ['Daily Dew Serum', 269900]]);
 for (const [name, price] of indiaPriceMigration) db.prepare('UPDATE products SET price_cents = ? WHERE name = ? AND price_cents IN (2200,2400,2600,2900,3200,3600)').run(price, name);
-Promise.all(db.prepare('SELECT * FROM products').all().map(product => firebaseUpsert('products', product.id, product))).catch(error => console.warn(`Firebase seed sync skipped: ${error.message}`));
+Promise.all([
+  ...db.prepare('SELECT * FROM products').all().map(product => firebaseUpsert('products', product.id, product)),
+  ...db.prepare('SELECT * FROM categories').all().map(category => firebaseUpsert('categories', category.id, category))
+]).catch(error => console.warn(`Firebase seed sync skipped: ${error.message}`));
 
 async function loadFirestoreData() {
   if (!firebaseEnabled()) return;
@@ -320,6 +331,11 @@ app.get('/api/products', async (_req, res) => {
     res.json({ products: localProducts().filter(product => product.active !== 0) });
   }
 });
+const localCategories = () => db.prepare('SELECT * FROM categories ORDER BY name COLLATE NOCASE').all();
+app.get('/api/categories', async (_req, res) => {
+  try { const categories = await firestoreCollection('categories'); if (categories?.length) return res.json({ categories: categories.map(category => ({ id: Number(category.id || 0), name: category.name })).sort((a, b) => a.name.localeCompare(b.name)) }); } catch (error) { console.warn(`Firestore category read skipped: ${error.message}`); }
+  res.json({ categories: localCategories() });
+});
 app.get('/api/store-settings', async (_req, res) => {
   try { const settings = await firestoreSettings(); if (settings) return res.json({ settings }); } catch (error) { console.warn(`Firestore settings read skipped: ${error.message}`); }
   const rows = db.prepare("SELECT key,value FROM store_settings WHERE key IN ('store_name','currency','upi_id')").all();
@@ -341,6 +357,20 @@ app.post('/api/feedback', async (req, res) => {
 app.get('/api/admin/products', auth, role('admin', 'owner'), async (_req, res) => {
   try { res.json({ products: (await firestoreProducts()) || localProducts() }); }
   catch (error) { console.warn(`Firestore admin product read skipped: ${error.message}`); res.json({ products: localProducts() }); }
+});
+app.post('/api/admin/categories', auth, role('admin', 'owner'), async (req, res) => {
+  const name = String(req.body?.name || '').trim(); if (!name) return res.status(400).json({ error: 'Category name is required.' });
+  try { const result = db.prepare('INSERT INTO categories (name) VALUES (?)').run(name); const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(result.lastInsertRowid); await firebaseUpsert('categories', category.id, category); res.status(201).json({ category }); } catch { res.status(409).json({ error: 'That category already exists.' }); }
+});
+app.patch('/api/admin/categories/:id', auth, role('admin', 'owner'), async (req, res) => {
+  const name = String(req.body?.name || '').trim(); if (!name) return res.status(400).json({ error: 'Category name is required.' });
+  const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id); if (!category) return res.status(404).json({ error: 'Category not found.' });
+  try { const update = db.transaction(() => { db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(name, category.id); db.prepare('UPDATE products SET type = ? WHERE type = ?').run(name, category.name); }); update(); const updated = db.prepare('SELECT * FROM categories WHERE id = ?').get(category.id); await firebaseUpsert('categories', updated.id, updated); const products = db.prepare('SELECT * FROM products WHERE type = ?').all(name); await Promise.all(products.map(product => firebaseUpsert('products', product.id, product))); res.json({ category: updated }); } catch { res.status(409).json({ error: 'That category already exists.' }); }
+});
+app.delete('/api/admin/categories/:id', auth, role('admin', 'owner'), async (req, res) => {
+  const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id); if (!category) return res.status(404).json({ error: 'Category not found.' });
+  const used = db.prepare('SELECT COUNT(*) AS count FROM products WHERE type = ?').get(category.name).count; if (used) return res.status(409).json({ error: `Move or rename the ${used} product(s) in this category before deleting it.` });
+  db.prepare('DELETE FROM categories WHERE id = ?').run(category.id); await firebaseDelete('categories', category.id); res.status(204).end();
 });
 app.post('/api/admin/products', auth, role('admin', 'owner'), async (req, res) => {
   const { name, type, priceCents, compareAtCents = null, shade = '', image = '', description = '', inventory = 0 } = req.body || {};
